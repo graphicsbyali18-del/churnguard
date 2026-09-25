@@ -1,4 +1,10 @@
-import { getOrCreateSettings, upsertMember, logEvent, type Member } from "./store";
+import {
+  getOrCreateSettings,
+  upsertMember,
+  getMember,
+  logEvent,
+  type Member,
+} from "./store";
 import { sendSequenceStep } from "./messaging";
 
 export async function startOnboarding(params: {
@@ -10,7 +16,20 @@ export async function startOnboarding(params: {
   const settings = getOrCreateSettings(companyId);
 
   if (!settings.onboardingEnabled) {
-    logEvent({ type: "onboarding_skipped", data: { userId, companyId, reason: "disabled" } });
+    logEvent({
+      type: "onboarding_skipped",
+      data: { userId, companyId, reason: "disabled" },
+    });
+    return;
+  }
+
+  // Don't reset an existing member on duplicate webhook
+  const existing = getMember(companyId, userId);
+  if (existing && existing.status === "active") {
+    logEvent({
+      type: "onboarding_skipped",
+      data: { userId, companyId, reason: "already_active" },
+    });
     return;
   }
 
@@ -42,7 +61,13 @@ export async function startOnboarding(params: {
       console.log(`  Step ${i + 1}: scheduled in ${step.delayHours}h → ${step.type}`);
       logEvent({
         type: "sequence_step_scheduled",
-        data: { userId, companyId, stepIndex: i, delayHours: step.delayHours, type: step.type },
+        data: {
+          userId,
+          companyId,
+          stepIndex: i,
+          delayHours: step.delayHours,
+          type: step.type,
+        },
       });
     }
   }
@@ -55,6 +80,12 @@ export async function startOnboarding(params: {
 
 export async function markMemberLeft(params: { userId: string; companyId: string }) {
   const { userId, companyId } = params;
+  const member = getMember(companyId, userId);
+  if (member) {
+    member.status = "canceled";
+    member.healthScore = Math.min(member.healthScore, 20);
+    upsertMember(member);
+  }
   logEvent({ type: "member_left", data: { userId, companyId } });
   console.log(`[ChurnGuard] Member left: ${userId} from ${companyId}`);
 }
